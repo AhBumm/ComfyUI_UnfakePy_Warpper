@@ -1,6 +1,6 @@
 [project]
-name = "unfakepy_warpper"
-description = "Warp Unfake.py for ComfyUI"
+name = "unfakepy_warpper_pixelatedTools"
+description = "Warp Unfake.py for ComfyUI. A great tool for pixelated AIGC pixel artwork"
 version = "1.0.0"
 license = {file = "LICENSE"} 
 # classifiers = [
@@ -29,7 +29,7 @@ Documentation = "https://github.com/AhBumm/ComfyUI_UnfakePy_Warpper/wiki"
 "Bug Tracker" = "https://github.com/AhBumm/ComfyUI_UnfakePy_Warpper/issues"
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "billbum"
 DisplayName = "ComfyUI_UnfakePy_Warpper"
 Icon = ""
 includes = [] 
