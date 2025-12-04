@@ -237,6 +237,47 @@ class ImageScaleDownByFactor():
 
         return(tensor_out, final_width, final_height)
 
+class ImageUpscaleByInt():
+
+    def __init__(self):
+        pass
+    
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "scale_int": ("INT", {"default": 1,"min": 1,"max": 64,"step": 1}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "INT", "INT",)
+    RETURN_NAMES = ("out_img", "width", "height",)
+    FUNCTION = "up_by_int"
+    CATEGORY = "BillBum/PixelTools"
+
+    def up_by_int(self, image, scale_int):
+        if scale_int <= 1:
+            _, h, w, _ = image.shape
+            return (image, w, h)
+
+        output_images = []
+
+        for img_tensor in image:
+
+            pil_img = tensor2pil(img_tensor.unsqueeze(0))
+            original_width, original_height = pil_img.size
+
+            new_width, new_height = int(original_width * scale_int), int(original_height * scale_int)
+
+            resized_pil = pil_img.resize((new_width, new_height), Image.Resampling.NEAREST)
+            output_images.append(pil2tensor(resized_pil))
+
+        tensor_out = torch.cat(output_images, dim=0)
+        final_width, final_height = tensor_out.shape[3], tensor_out.shape[2]
+
+        return(tensor_out, final_width, final_height)
+
 class PixelUpscale2Target():
 
     def __init__(self):
@@ -247,24 +288,94 @@ class PixelUpscale2Target():
         return {"required":
                     {
                         "image": ("IMAGE", ),
-                        "target_resolution": ("INT", {"default": 1024, "min": 0, "max": 4096, "step": 2}),
+                        "target_resolution": ("INT", {"default": 1024}),
+                        "crop_and_pad": ("BOOLEAN", {"default": False}),
                     }
                 }
-
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "upscale2target"
+    
+    RETURN_TYPES = ("IMAGE", "IMAGE",)
+    RETURN_NAMES = ("upscaled_img", "cropped_origin_img",)
+    FUNCTION = "process_gif"
     CATEGORY = "BillBum/PixelTools"
 
-    def upscale2target(self, image, target_resolution):
+    def process_gif(self, image, target_resolution, crop_and_pad):
+        
+        pil_images = [tensor2pil(image[i:i+1]) for i in range(image.shape[0])]
+        
+        cropped_pil_images = pil_images
+        
+        if crop_and_pad:
+            is_transparent_gif = False
+            first_frame = pil_images[0]
 
-        processed_images = []
-        for i in range(image.shape[0]):
-            single_image_tensor = image[i:i+1]
-            pil_image = tensor2pil(single_image_tensor)
-            result_pil = pillow_scale_up_nearest(pil_image, target_resolution)
-            result_tensor = pil2tensor(result_pil)
-            processed_images.append(result_tensor)
-            
-        batch_output = torch.cat(processed_images, dim=0)
-        return (batch_output,)
+            if first_frame.mode == 'RGBA':
+                w, h = first_frame.size
+                if w > 0 and h > 0:
+
+                    try:
+                        corners = [
+                            first_frame.getpixel((0, 0)),
+                            first_frame.getpixel((w - 1, 0)),
+                            first_frame.getpixel((0, h - 1)),
+                            first_frame.getpixel((w - 1, h - 1))
+                        ]
+                        if all(c[3] < 192 for c in corners):
+                            is_transparent_gif = True
+
+                    except IndexError:
+                        print(f"IndexError when accessing pixels of the image with size ({w}, {h})")
+                        pass
+
+            if is_transparent_gif:
+                global_bbox = None
+                for pil_img in pil_images:
+                    img_rgba = pil_img if pil_img.mode == 'RGBA' else pil_img.convert('RGBA')
+                    bbox = img_rgba.getbbox()
+                    if bbox:
+                        if global_bbox is None: global_bbox = list(bbox)
+                        else:
+                            global_bbox[0] = min(global_bbox[0], bbox[0])
+                            global_bbox[1] = min(global_bbox[1], bbox[1])
+                            global_bbox[2] = max(global_bbox[2], bbox[2])
+                            global_bbox[3] = max(global_bbox[3], bbox[3])
+                
+                if global_bbox:
+                    temp_cropped_list = []
+                    crop_w, crop_h = global_bbox[2] - global_bbox[0], global_bbox[3] - global_bbox[1]
+                    max_side = max(crop_w, crop_h)
+                    pad = int(max_side * 0.15)
+                    final_size = max_side + pad * 2
+                    
+                    for pil_img in pil_images:
+                        final_img = Image.new('RGBA', (final_size, final_size), (0, 0, 0, 0))
+                        cropped_part = pil_img.crop(global_bbox)
+                        paste_pos = ((final_size - crop_w) // 2, (final_size - crop_h) // 2)
+                        final_img.paste(cropped_part, paste_pos, cropped_part)
+                        temp_cropped_list.append(final_img)
+                    
+                    if temp_cropped_list:
+                        cropped_pil_images = temp_cropped_list
+            else:
+                w, h = pil_images[0].size
+                min_side = min(w, h)
+                
+                half_side = min_side // 2
+                center_x, center_y = w // 2, h // 2
+                
+                box = (center_x - half_side, center_y - half_side, center_x + half_side, center_y + half_side)
+                
+                temp_cropped_list = []
+                for pil_img in pil_images:
+                    temp_cropped_list.append(pil_img.crop(box))
+                
+                cropped_pil_images = temp_cropped_list
+                        
+        cropped_tensors = [pil2tensor(img) for img in cropped_pil_images]
+        image_batch_after_crop = torch.cat(cropped_tensors, dim=0)
+
+        upscaled_pil_images = [pillow_scale_up_nearest(pil_img, target_resolution) for pil_img in cropped_pil_images]
+        
+        final_tensors = [pil2tensor(img) for img in upscaled_pil_images]
+        batch_output = torch.cat(final_tensors, dim=0)
+        
+        return (batch_output, image_batch_after_crop,)

@@ -6,6 +6,7 @@ NODE_CLASS_MAPPINGS = {
     "ForceDetectPixelateScale": ForceDetectScale,
     "NearestImageScaleDown": ImageScaleDownByWH,
     "ImageScaleDownByFactor": ImageScaleDownByFactor,
+    "ImageUpscaleByInt": ImageUpscaleByInt,
     "PixelUpscale2Target": PixelUpscale2Target,
 }
 
@@ -14,5 +15,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ForceDetectPixelateScale": "Force Detect Pixelate Scale",
     "NearestImageScaleDown": "Image Downscale By W&H",
     "ImageScaleDownByFactor": "Image Downscale By Factor",
-    "PixelUpscale2Target": "PixelIMG Upscale To Target",
+    "PixelUpscale2Target": "Pixel IMG Upscale To Target",
+    "ImageUpscaleByInt": "Image Upscale By Integer",
 }
