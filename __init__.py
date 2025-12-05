@@ -19,5 +19,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageScaleDownByFactor": "Image Downscale By Factor",
     "PixelUpscale2Target": "Pixel IMG Upscale To Target",
     "ImageUpscaleByInt": "Image Upscale By Integer",
-    "RemoveBackgroundPixel": "Remove Background Hard Edge",
+    "RemoveBackgroundPixel": "Remove Background (FloodFill)",
 }
