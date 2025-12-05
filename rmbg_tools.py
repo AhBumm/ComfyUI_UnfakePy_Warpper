@@ -1,0 +1,258 @@
+import cv2
+import numpy as np
+import torch
+from PIL import Image
+
+
+## DataType Conversion Functions
+def tensor2pil(image):
+    return Image.fromarray(np.clip(255. * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))
+
+def pil2tensor(image):
+    return torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0)
+
+def tensor2ndarray(image):
+    return np.clip(255. * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8)
+
+def ndarray2tensor(image):
+    return torch.from_numpy(image.astype(np.float32) / 255.0).unsqueeze(0)
+
+
+# --------------------
+# Global Parameters
+# --------------------
+BORDER_WIDTH = 3
+MIN_BG_RATIO = 0.01          # Allow very little background (subject fills the frame)
+MIN_FG_RATIO = 0.03          # Allow very small foreground (tiny objects/particles)
+
+def bgr_to_lab(img_bgr: np.ndarray) -> np.ndarray:
+    """BGR → Lab"""
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+
+
+def estimate_bg_color_from_border(img_lab: np.ndarray, border_width: int = BORDER_WIDTH):
+
+    h, w = img_lab.shape[:2]
+    top = img_lab[0:border_width, :, :]
+    bottom = img_lab[h - border_width:h, :, :]
+    left = img_lab[:, 0:border_width, :]
+    right = img_lab[:, w - border_width:w, :]
+
+    border_pixels = np.concatenate([
+        top.reshape(-1, 3),
+        bottom.reshape(-1, 3),
+        left.reshape(-1, 3),
+        right.reshape(-1, 3)
+    ], axis=0).astype(np.float32)
+
+    # Background color: median is more robust to noise than mean
+    bg_color = np.median(border_pixels, axis=0)
+
+    # Calculate the distance of all border pixels to this color
+    diff = border_pixels - bg_color[None, :]
+    dist = np.linalg.norm(diff, axis=1)
+
+    inlier_thresh = 10.0
+    inliers = dist < inlier_thresh
+    inlier_ratio = np.mean(inliers)
+
+    print(f"[estimate_bg_color] inlier_ratio={inlier_ratio:.3f} (thresh={inlier_thresh})")
+
+    if inlier_ratio < 0.6:  # At least 60% of the border should be background
+        print("[estimate_bg_color] inlier ratio too low, reject.")
+        return bg_color.astype(np.float32), False, 10.0
+
+    # 3. Adaptive threshold based only on inliers statistics
+    valid_dist = dist[inliers]
+    max_dist = float(valid_dist.max())
+    p95 = float(np.percentile(valid_dist, 95))
+
+    print(f"[estimate_bg_color] inliers stats: max={max_dist:.3f}, p95={p95:.3f}")
+
+    suggested_thresh = max(p95 * 1.2, max_dist + 1.0)
+    suggested_thresh = float(np.clip(suggested_thresh, 3.0, 20.0))
+    is_uniform = True
+
+    return bg_color.astype(np.float32), is_uniform, suggested_thresh
+
+
+def flood_background_from_edges(img_lab: np.ndarray, bg_color: np.ndarray,
+                                color_thresh: float = 10.0) -> np.ndarray:
+    """
+    Flood fill from the edges using color constraints, starting from edge pixels as background seeds.
+    """
+    h, w = img_lab.shape[:2]
+    # 1. Calculate the distance of all pixels to the background color
+    # img_lab: (H, W, 3), bg_color: (3,)
+    diff = np.linalg.norm(img_lab - bg_color, axis=2)
+    binary_mask = (diff <= color_thresh).astype(np.uint8)
+    padded_mask = np.pad(binary_mask, pad_width=1, mode='constant', constant_values=1)
+    cv2.floodFill(padded_mask, None, seedPoint=(0, 0), newVal=2)
+    bg_mask = (padded_mask[1:-1, 1:-1] == 2).astype(np.uint8)
+
+    print(f"[flood_background] flooded background pixels: {int(bg_mask.sum())}")
+    return bg_mask
+
+
+def quality_check_masks(bg_mask: np.ndarray,
+                        min_bg_ratio: float = MIN_BG_RATIO,
+                        min_fg_ratio: float = MIN_FG_RATIO,
+                        return_reason: bool = False):
+    
+    h, w = bg_mask.shape
+    total = h * w
+    bg_area = int(bg_mask.sum())
+    fg_area = total - bg_area
+
+    bg_ratio = bg_area / total
+    fg_ratio = fg_area / total
+
+    print(f"[quality_check] bg_ratio={bg_ratio:.3f}, fg_ratio={fg_ratio:.3f}")
+
+    if bg_ratio < min_bg_ratio:
+        print("[quality_check] Background ratio too small, check failed")
+        if return_reason:
+            return False, "bg_too_small"
+        return False
+
+    if fg_ratio < min_fg_ratio:
+        print("[quality_check] Foreground ratio too small, check failed")
+        if return_reason:
+            return False, "fg_too_small"
+        return False
+
+    # Check if the bounding box of the foreground region touches the edges
+    fg_mask = (bg_mask == 0).astype(np.uint8)
+    ys, xs = np.where(fg_mask > 0)
+    if len(xs) == 0:
+        print("[quality_check] No foreground pixels detected")
+        if return_reason:
+            return False, "no_fg"
+        return False
+
+    x_min, x_max = xs.min(), xs.max()
+    y_min, y_max = ys.min(), ys.max()
+
+    if return_reason:
+        return True, "ok"
+    return True
+
+
+def flood_with_adaptive_thresh(img_lab: np.ndarray,
+                               bg_color: np.ndarray,
+                               base_thresh: float,
+                               max_attempts: int = 3):
+    
+    thresh = float(base_thresh)
+    last_bg_mask = None
+
+    for i in range(max_attempts):
+        print(f"[adaptive_flood] attempt {i + 1}, thresh={thresh:.3f}")
+        bg_mask = flood_background_from_edges(img_lab, bg_color, color_thresh=thresh)
+        last_bg_mask = bg_mask
+
+        ok, reason = quality_check_masks(
+            bg_mask,
+            min_bg_ratio=MIN_BG_RATIO,
+            min_fg_ratio=MIN_FG_RATIO,
+            return_reason=True,
+        )
+
+        if ok:
+            print(f"[adaptive_flood] success on attempt {i + 1}")
+            return True, bg_mask, thresh
+
+        if reason == "bg_too_small":
+            thresh *= 1.3
+        elif reason in ("fg_too_small", "no_fg"):
+            thresh *= 0.7
+        else:
+            break
+
+    print("[adaptive_flood] all attempts failed")
+    return False, last_bg_mask, thresh
+
+
+def create_foreground_rgba(img_bgr: np.ndarray, alpha_mask: np.ndarray) -> np.ndarray:
+    """
+    根据 alpha_mask 生成 RGBA 前景图：
+      - alpha_mask: 0-255 的 alpha 通道
+    """
+    h, w = alpha_mask.shape
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[..., 0:3] = img_rgb
+    rgba[..., 3] = alpha_mask
+    return rgba
+
+
+
+class MOD_RMBG_NODE:
+
+    def __init__(self):
+        pass
+    
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+            },
+        }
+    
+    RETURN_TYPES = ("IMAGE", "MASK", "MASK")
+    FUNCTION = "process_image"
+    CATEGORY = "Billbum/PixelTools"
+
+    def process_image(self, image):
+        """
+        # Main process:
+        # 1. Convert tensor to numpy
+        # 2. Estimate background color and determine if it is close to a solid color background (adaptive threshold)
+        # 3. Flood fill from edges to erode background (with threshold feedback retry)
+        # 4. Perform quality check (built into adaptive flood)
+        # 5. Output foreground & mask (Tensor)
+        """
+        
+        img_np = tensor2ndarray(image)
+        img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+
+        h, w = img_bgr.shape[:2]
+        print(f"[process_image] size: {w} x {h}")
+
+        img_lab = bgr_to_lab(img_bgr)
+
+        def get_fallback_return():
+            rgba = np.dstack((img_np, np.full((h, w), 255, dtype=np.uint8)))
+            fg_mask = np.full((h, w), 255, dtype=np.uint8)
+            bg_mask_vis = np.zeros((h, w), dtype=np.uint8)
+            return ndarray2tensor(rgba), ndarray2tensor(fg_mask), ndarray2tensor(bg_mask_vis)
+
+        bg_color, is_uniform, suggested_thresh = estimate_bg_color_from_border(
+            img_lab, border_width=BORDER_WIDTH
+        )
+        print(f"[process_image] estimated bg_color (Lab): {bg_color}, "
+            f"uniform={is_uniform}, suggested_thresh={suggested_thresh:.3f}")
+
+        if not is_uniform:
+            print("[process_image] Edge colors are not uniform enough, determined to have no solid color background, skipping.")
+            return get_fallback_return()
+
+        ok, bg_mask, final_thresh = flood_with_adaptive_thresh(
+            img_lab, bg_color, base_thresh=suggested_thresh, max_attempts=3
+        )
+        if not ok or bg_mask is None:
+            print("[process_image] Adaptive flood attempts all failed, skipping output.")
+            return get_fallback_return()
+
+        print(f"[process_image] final used thresh={final_thresh:.3f}")
+        final_alpha = (1 - bg_mask).astype(np.uint8) * 255
+        rgba = create_foreground_rgba(img_bgr, final_alpha)
+
+        fg_mask = final_alpha
+        bg_mask_vis = (255 - final_alpha)
+
+        tensor_out = ndarray2tensor(rgba)
+        tensor_fg_mask = ndarray2tensor(fg_mask)
+        tensor_bg_mask = ndarray2tensor(bg_mask_vis)
+        return (tensor_out, tensor_fg_mask, tensor_bg_mask,)
