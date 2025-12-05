@@ -79,62 +79,29 @@ def estimate_bg_color_from_border(img_lab: np.ndarray, border_width: int = BORDE
 def flood_background_from_edges(img_lab: np.ndarray, bg_color: np.ndarray,
                                 color_thresh: float = 10.0,
                                 hole_ratio_threshold: float = 0.18) -> np.ndarray:
-    """
-    结合 Flood Fill (外部) 和 自适应统计分析 (内部镂空)
-    """
+    
     h, w = img_lab.shape[:2]
-
-    # 1. 计算全图像素到背景色的“色差距离”
-    # img_lab: (H, W, 3), bg_color: (3,)
     diff = np.linalg.norm(img_lab - bg_color, axis=2)
-
-    # 2. 生成基础二值掩码 (用于 Flood Fill)
     binary_mask = (diff <= color_thresh).astype(np.uint8)
-
-    # 3. 获取 [外部背景]：使用 Flood Fill 确保连通性
-    # pad 是 floodFill 必须的，填充 1 防止水漫出边界
     padded_mask = np.pad(binary_mask, pad_width=1, mode='constant', constant_values=1)
-    
-    # 从 (0,0) 种子点开始填充，填充值为 2 (标记为确定的外部背景)
     cv2.floodFill(padded_mask, None, seedPoint=(0, 0), newVal=2)
-    
-    # 提取填充后的结果 (去掉了 pad)
     outer_bg_mask = (padded_mask[1:-1, 1:-1] == 2).astype(np.uint8)
-
-    # ---------------------------------------------------------
-    # 4. 【核心功能引入】自适应计算内部阈值
-    # ---------------------------------------------------------
-    
-    # 获取所有被漫水填充确认为“外部背景”的像素的色差值
     confirmed_bg_diffs = diff[outer_bg_mask == 1]
 
     if confirmed_bg_diffs.size > 0:
-        # 计算背景色差的 均值(Mean) 和 标准差(Std)
+
         bg_mean = np.mean(confirmed_bg_diffs)
         bg_std = np.std(confirmed_bg_diffs)
-        
-        # 动态定义严格阈值：
-        # 逻辑：真正的背景像素通常分布在 Mean + 2*Std 范围内 (约95%置信区间)
-        # 我们计算这个上限，并强制它不能超过原始的 color_thresh
         adaptive_thresh = bg_mean + 2.0 * bg_std
-        
-        # 限制阈值范围：最小给 1.0 (容错)，最大不超过外部阈值
         strict_thresh = float(np.clip(adaptive_thresh, 1.0, color_thresh))
         
         print(f"[flood_background] Adaptive Stats - Mean: {bg_mean:.2f}, Std: {bg_std:.2f} -> Strict Thresh: {strict_thresh:.2f}")
     else:
-        # 如果漫水填充失败 (比如图片填满主体)，使用保守策略
         strict_thresh = color_thresh * 0.8
         print(f"[flood_background] Flood failed, using fallback thresh: {strict_thresh:.2f}")
 
-    # 5. 获取 [内部镂空]
-    # 逻辑：(色差 <= 严格阈值) 且 (不是外部背景)
-    # 这能把那些“没连通边缘，但颜色极度像背景”的区域扣掉
     internal_holes_mask = (diff <= strict_thresh) & (outer_bg_mask == 0)
 
-    # ---------------------------------------------------------
-    # 5.1. 【新增功能】根据镂空比例决定是否应用镂空
-    # ---------------------------------------------------------
     num_holes = np.sum(internal_holes_mask)
     num_potential_fg = np.sum(outer_bg_mask == 0)
     
@@ -146,7 +113,6 @@ def flood_background_from_edges(img_lab: np.ndarray, bg_color: np.ndarray,
             print(f"[flood_background] Hole ratio {hole_ratio:.3f} < {hole_ratio_threshold}, ignoring internal holes.")
             internal_holes_mask[:] = False
 
-    # 6. 合并结果：外部背景 + 内部镂空
     final_bg_mask = outer_bg_mask | internal_holes_mask.astype(np.uint8)
 
     print(f"[flood_background] Final - Outer: {int(outer_bg_mask.sum())}, Holes: {int(internal_holes_mask.sum())}")
@@ -234,10 +200,7 @@ def flood_with_adaptive_thresh(img_lab: np.ndarray,
 
 
 def create_foreground_rgba(img_bgr: np.ndarray, alpha_mask: np.ndarray) -> np.ndarray:
-    """
-    根据 alpha_mask 生成 RGBA 前景图：
-      - alpha_mask: 0-255 的 alpha 通道
-    """
+    
     h, w = alpha_mask.shape
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
