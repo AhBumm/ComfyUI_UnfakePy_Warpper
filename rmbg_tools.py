@@ -223,7 +223,11 @@ class MOD_RMBG_NODE:
         img_lab = bgr_to_lab(img_bgr)
 
         def get_fallback_return():
-            rgba = np.dstack((img_np, np.full((h, w), 255, dtype=np.uint8)))
+            if img_np.shape[2] == 4:
+                rgba = img_np
+            else:
+                rgba = np.dstack((img_np, np.full((h, w), 255, dtype=np.uint8)))
+                
             fg_mask = np.full((h, w), 255, dtype=np.uint8)
             bg_mask_vis = np.zeros((h, w), dtype=np.uint8)
             return ndarray2tensor(rgba), ndarray2tensor(fg_mask), ndarray2tensor(bg_mask_vis)
