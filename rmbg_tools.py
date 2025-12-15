@@ -52,13 +52,13 @@ def estimate_bg_color_from_border(img_lab: np.ndarray, border_width: int = BORDE
     diff = border_pixels - bg_color[None, :]
     dist = np.linalg.norm(diff, axis=1)
 
-    inlier_thresh = 10.0
+    inlier_thresh = 15.0
     inliers = dist < inlier_thresh
     inlier_ratio = np.mean(inliers)
 
     print(f"[estimate_bg_color] inlier_ratio={inlier_ratio:.3f} (thresh={inlier_thresh})")
 
-    if inlier_ratio < 0.5:  # At least 50% of the border should be background
+    if inlier_ratio < 0.42:  # At least 42% of the border should be background
         print("[estimate_bg_color] inlier ratio too low, reject.")
         return bg_color.astype(np.float32), False, 10.0
 

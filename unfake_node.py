@@ -379,3 +379,31 @@ class PixelUpscale2Target():
         batch_output = torch.cat(final_tensors, dim=0)
         
         return (batch_output, image_batch_after_crop,)
+
+class Images_To_RGB:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "image_to_rgb"
+
+    CATEGORY = "BillBum/Tools"
+
+    def image_to_rgb(self, images):
+
+        if len(images) > 1:
+            tensors = []
+            for image in images:
+                tensors.append(pil2tensor(tensor2pil(image).convert('RGB')))
+            tensors = torch.cat(tensors, dim=0)
+            return (tensors, )
+        else:
+            return (pil2tensor(tensor2pil(images).convert("RGB")), )

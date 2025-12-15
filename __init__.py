@@ -10,6 +10,7 @@ NODE_CLASS_MAPPINGS = {
     "ImageUpscaleByInt": ImageUpscaleByInt,
     "PixelUpscale2Target": PixelUpscale2Target,
     "RemoveBackgroundPixel": MOD_RMBG_NODE,
+    "ImagesToRGB": Images_To_RGB,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -20,4 +21,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PixelUpscale2Target": "Pixel IMG Upscale To Target",
     "ImageUpscaleByInt": "Image Upscale By Integer",
     "RemoveBackgroundPixel": "Remove Background (FloodFill)",
+    "ImagesToRGB": "Images Convert RGB",
 }
