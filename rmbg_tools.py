@@ -209,6 +209,48 @@ def create_foreground_rgba(img_bgr: np.ndarray, alpha_mask: np.ndarray) -> np.nd
     return rgba
 
 
+def remove_floating_small_components(alpha_mask: np.ndarray,
+                                     ratio_threshold: float = 0.08,
+                                     connectivity: int = 4,
+                                     min_pixels: int = 4):
+    
+    if alpha_mask is None or alpha_mask.size == 0:
+        return alpha_mask
+
+    fg = (alpha_mask > 0).astype(np.uint8)
+    if fg.sum() == 0:
+        return alpha_mask
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        fg, connectivity=connectivity
+    )
+    
+    if num_labels <= 2:
+        return alpha_mask
+
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    if areas.size == 0:
+        return alpha_mask
+
+    amax = int(areas.max())
+    if amax <= 0:
+        return alpha_mask
+
+    cutoff = max(int(amax * float(ratio_threshold)), int(min_pixels))
+
+    remove = np.zeros_like(fg, dtype=np.uint8)
+    for comp_label in range(1, num_labels):
+        area = int(stats[comp_label, cv2.CC_STAT_AREA])
+        if area < cutoff:
+            remove[labels == comp_label] = 1
+
+    if remove.sum() == 0:
+        return alpha_mask
+
+    cleaned = alpha_mask.copy()
+    cleaned[remove == 1] = 0
+    return cleaned
+
 
 class MOD_RMBG_NODE:
 
@@ -278,7 +320,9 @@ class MOD_RMBG_NODE:
                 out_bg_list.append(f_bg)
             else:
                 print(f"[process_image] final used thresh={final_thresh:.3f}")
+
                 final_alpha = (1 - bg_mask).astype(np.uint8) * 255
+                final_alpha = remove_floating_small_components(final_alpha)
                 rgba_np = create_foreground_rgba(img_bgr, final_alpha)
                 
                 fg_mask_np = final_alpha
